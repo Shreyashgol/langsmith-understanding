@@ -10,7 +10,8 @@ from langsmith import traceable
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
@@ -23,11 +24,11 @@ INDEX_ROOT = Path(".indices")
 INDEX_ROOT.mkdir(exist_ok=True)
 
 # ----------------- helpers (traced) -----------------
-@traceable(name="load_pdf")
+@traceable(name="load_pdf", tags=['pdf','loader'], metadata={'loader': 'pyPDFLoader'})
 def load_pdf(path: str):
     return PyPDFLoader(path).load()  # list[Document]
 
-@traceable(name="split_documents")
+@traceable(name="split_documents",tags=['embedding','vectorstore'],metadata={'embedding-model': 'text-embedding-3-s'} )
 def split_documents(docs, chunk_size=1000, chunk_overlap=150):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size, chunk_overlap=chunk_overlap
@@ -36,7 +37,9 @@ def split_documents(docs, chunk_size=1000, chunk_overlap=150):
 
 @traceable(name="build_vectorstore")
 def build_vectorstore(splits, embed_model_name: str):
-    emb = OpenAIEmbeddings(model=embed_model_name)
+    emb = HuggingFaceBgeEmbeddings(
+        model_name = 'sentence-transformers/all-MiniLM-L6-v2'
+    )
     return FAISS.from_documents(splits, emb)
 
 # ----------------- cache key / fingerprint -----------------
@@ -61,7 +64,9 @@ def _index_key(pdf_path: str, chunk_size: int, chunk_overlap: int, embed_model_n
 # ----------------- explicitly traced load/build runs -----------------
 @traceable(name="load_index", tags=["index"])
 def load_index_run(index_dir: Path, embed_model_name: str):
-    emb = OpenAIEmbeddings(model=embed_model_name)
+    emb = HuggingFaceBgeEmbeddings(
+        model_name = 'sentence-transformers/all-MiniLM-L6-v2'
+    )
     return FAISS.load_local(
         str(index_dir),
         emb,
@@ -100,7 +105,13 @@ def load_or_build_index(
         return build_index_run(pdf_path, index_dir, chunk_size, chunk_overlap, embed_model_name)
 
 # ----------------- model, prompt, and pipeline -----------------
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+groq_api_key = os.getenv("groq_api")
+llm = ChatGroq(
+    model = 'llama-3.3-70b-versatile',
+    api_key = groq_api_key,
+    temperature = 0.7
+
+)
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", "Answer ONLY from the provided context. If not found, say you don't know."),
